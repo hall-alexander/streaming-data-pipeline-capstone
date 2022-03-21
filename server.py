@@ -7,6 +7,7 @@ import types
 import pandas as pd
 import numpy as np
 import time
+import json
 
 sel = selectors.DefaultSelector()
 
@@ -43,14 +44,17 @@ def service_connection(key, mask):
     sock = key.fileobj
     data = key.data
 
-    f = open("data.txt", "r")
-    gen = prepare_transmission(f)
+    df = pd.read_csv("data.txt", sep="|", names=['timestamp_utc', 'mmsi', 'position', 'navigation_status', 'speed_over_ground', 'course_over_ground', 'message_type', 
+        'source_identifier', 'position_verified', 'position_latency', 'raim_flag', 'vessel_name', 'vessel_type', 
+        'timestamp_offset_seconds', 'true_heading', 'rate_of_turn', 'repeat_indicator'])
+
+    gen = df.iterrows()
     while True:
         try:
-            sock.sendall(bytes(",".join([x for x in next(gen)]), encoding="utf-8"))
-            time.sleep(1)
+            row = next(gen)
+            sock.sendall(bytes(json.dumps(row[1].to_dict()).ljust(900, ' '), encoding="utf-8"))
+            time.sleep(0.01)
         except StopIteration:
-            f.close()
             sel.unregister(sock)
             sock.close()
 
