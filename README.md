@@ -28,11 +28,27 @@ Maritime vessel path trajectory prediction with AIS data has been researched for
 
 # The Data Set
 
+This section describes the data used to predict vessel path trajectories.
 - Explain the data set
 - Why did you choose it?
 - What do you like about it?
 - What is problematic?
 - What do you want to do with it?
+
+### What is AIS?
+
+One system that is often used for vessel tracking is the Automatic Identification System (AIS). The International Maritime Organization passed the Safety of Life at Sea treaty in 2002, which mandated that vessels that exceed 300 gross tonnage are required to fit a class A AIS transceiver. Since then, most commercial vessels carry an AIS transceiver on board and voluntarily broadcast their AIS signal. AIS is comparable to Automatic Dependent Surveillance-Broadcast (ADS-B) system used in the aviation industry as its intended use was for collision avoidance in traffic-heavy areas like ports or shipping lanes.
+
+### AIS Position Reports
+
+The contents of an AIS message can vary depending on the message type attribute. There are 27 message types that are commonly used, though the data in this repository has been filtered to correspond to position reports (message_type in [1, 2, 3, 18, 27]). The position report includes information relating to the ship's navigation such as the timestamp of the message, GPS coordinates, true heading, speed over ground, and course over ground. The data is transmitted in intervals of 5-30 seconds while the ship is in motion and every three minutes if the ship is anchored.
+
+### Preprocessing Considerations
+
+One of the major weaknesses of AIS data is the highly irregular time intervals between messages for a given MMSI, contrary to the intended transmission rate of 1 message every 3 seconds. Having irregular message intervals for data can considerably affect the accuracy of predictions made by a real-time system, since several minutes could go by before receiving another message that could have drastically different spatial/kinematic features. A dead-reckoning assumption can be used to predict a straight line path from the last transmission, though this can be error-prone if the vessel is within a port where the trajectory is more complex. [Mao et al. (2016)](https://link.springer.com/chapter/10.1007/978-3-319-57421-9_20) propose using linear interpolation as a means to fill in the missing data since ships typically have constant acceleration during a voyage.
+
+
+
 
 | column name  | data type  | description |
 | ------------ | ------------ |------------ |
@@ -61,6 +77,12 @@ Maritime vessel path trajectory prediction with AIS data has been researched for
 - Why did you choose them
 - How did you set them up
 
+Apache Kafka is a distributed, event-streaming platform designed for real-time analytical workflows. It is a fusion of two types of queue systems: the shared message queue and the publish-subscribe model. Kafka functions like a shared message queue when there is only one consumer group for a particular topic; however, when an additional consumer group is added then Kafka functions like a pub-sub system where messages can be sent to all subscribers. 
+
+
+
+
+
 ## Connect
 ## Buffer
 ## Processing
@@ -71,7 +93,23 @@ Maritime vessel path trajectory prediction with AIS data has been researched for
 - Explain the pipelines for processing that you are building
 - Go through your development and add your source code
 
-## Stream Processing
+Appendix A shows the high-level system architecture of the real-time vessel path trajectory prediction model. The AIS data is collected from a server via a TCP socket. The AISProducer java application connects to the socket, parses the data, then publishes the data to the position_history topic on the Kafka broker. The data is then consumed by a Spark Structured Streaming connecter which performs a series of rolling window aggregate functions on the kinematic features in the data, namely speed_over_ground, course_over_ground, and rate_of_turn. The stream then outputs results to the position_history_processed Kafka topic, which in turn sends results to a spark connector for doing predictions using the MLlib package
+
+### Data Ingestion
+The AIS data was originally delivered over a TCP socket in [NMEA format](https://gpsd.gitlab.io/gpsd/AIVDM.html#_aivdmaivdo_sentence_layer) at a velocity of about 2800 messages per second. NMEA (National Marine Electronics Association) protocol 0183 (or 2000) is used to encode AIS data so it takes less bits to transmit a message from an AIS transceiver. Usually, the first step of the pipeline is to parse the NMEA-formatted AIS message. There are several open-source libraries that do this, but for this project, we will work with AIS data that has already been parsed. In order to mimic the original data-generating process, the `server.py` module opens a TCP socket on localhost and listens for incoming client connections over port 1234. The `client.py` module connects to the server socket. Once the connection is established, the server handles the connection by reading parsed AIS data from a CSV file into a `pandas.DataFrame`, converting each row into a padded json string, and finally converts the data to bytes and sending it over the socket. The client receives a fixed byte length of 900 so it receives _exactly one_ AIS message. The client then sends the message to the "position_history" topic on the kafka broker running on localhost:9092 using the `KafkaProducer` object.
+
+### Stream Processing
+Prior to running the `client.py` module, a kafka and zookeeper instance are created with `docker-compose.yml` by running the following:
+
+```sh
+docker-compose up -d
+```
+If you're unfamiliar with docker (or docker compose), this command starts a container for kafka and another container for zookeeper. We pull the docker images from a popular registry on docker hub, so each of these services are mostly ready to work right out of the box. 
+
+As the client process is receiving data from the server, it is sending each AIS message to the "position_history" topic on the kafka broker running on localhost:9092. Kafka will store this data in order since there is only one topic partition. 
+
+
+
 ### Storing Data Stream
 ### Processing Data Stream
 ## Batch Processing
