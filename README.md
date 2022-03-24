@@ -85,7 +85,11 @@ The `rate_of_turn` attribute is unitless as it was transformed by the AIS transc
 - Why did you choose them
 - How did you set them up
 
-Apache Kafka is a distributed, event-streaming platform designed for real-time analytical workflows. It is a fusion of two types of queue systems: the shared message queue and the publish-subscribe model. Kafka functions like a shared message queue when there is only one consumer group for a particular topic; however, when an additional consumer group is added then Kafka functions like a pub-sub system where messages can be sent to all subscribers. 
+Apache Kafka is a distributed, event-streaming platform designed for real-time analytical workflows. It is a fusion of two types of queue systems: the shared message queue and the publish-subscribe model. Kafka functions like a shared message queue when there is only one consumer group for a particular topic; however, when an additional consumer group is added then Kafka functions like a pub-sub system where messages can be sent to all subscribers. This project is only using one topic, one partition, and one consumer group - so why use a tool as complex as Kafka? One of the major advantages of Kafka for this project is the integration with Spark Structured Streaming. Kafka can be used as both source and sink for the stream, which makes it very simple to move data. Another reason is that this project eventually needs to scale for commercial application at [Space-Eyes](https://space-eyes.com/). Kafka can easily scale by adding more brokers to the cluster to handle more messages.
+
+The kafka cluster was originally configured on my Windows 10 desktop, though the configuration was eventually encoded in the `docker-compose.yml` file. The docker compose file will also start a zookeeper instance, which is used for administration tasks for the kafka cluster e.g. controller election in node failure scenario, tracking cluster topology, topic configuration settings. 
+
+Apache Spark structured streaming and MLLib are subsets of the Apache Spark project. Structured streaming allows us to continuously process data that we receive from a high volume data source. 
 
 
 
