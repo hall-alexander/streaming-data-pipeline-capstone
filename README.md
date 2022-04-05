@@ -85,32 +85,19 @@ The `rate_of_turn` attribute is unitless as it was transformed by the AIS transc
 - Why did you choose them
 - How did you set them up
 
-Apache Kafka is a distributed, event-streaming platform designed for real-time analytical workflows. It is a fusion of two types of queue systems: the shared message queue and the publish-subscribe model. Kafka functions like a shared message queue when there is only one consumer group for a particular topic; however, when an additional consumer group is added then Kafka functions like a pub-sub system where messages can be sent to all subscribers. This project is only using one topic, one partition, and one consumer group - so why use a tool as complex as Kafka? One of the major advantages of Kafka for this project is the integration with Spark Structured Streaming. Kafka can be used as both source and sink for the stream, which makes it very simple to move data. Another reason is that this project eventually needs to scale for commercial application at [Space-Eyes](https://space-eyes.com/). Kafka can easily scale by adding more brokers to the cluster to handle more messages.
+This project uses Apache Kafka for data ingestion and data buffering. Apache Kafka is a distributed, event-streaming platform designed for real-time analytical workflows. It is a fusion of two types of queue systems: the shared message queue and the publish-subscribe model. Kafka functions like a shared message queue when there is only one consumer group for a particular topic; however, when an additional consumer group is added then Kafka functions like a pub-sub system where messages can be sent to all subscribers. This project is only using one topic, one partition, and one consumer group - so why use a tool as complex as Kafka? One of the major advantages of Kafka for this project is the integration with Spark Structured Streaming. Kafka can be used as both source and sink for the stream, which makes it very simple to move data. Another reason is that this project eventually needs to scale for commercial application at [Space-Eyes](https://space-eyes.com/). Kafka can easily scale by adding more brokers to the cluster to handle more messages.
 
 The kafka cluster was originally configured on my Windows 10 desktop, though the configuration was eventually encoded in the `docker-compose.yml` file. The docker compose file will also start a zookeeper instance, which is used for administration tasks for the kafka cluster e.g. controller election in node failure scenario, tracking cluster topology, topic configuration settings. 
 
-Apache Spark structured streaming and MLLib are subsets of the Apache Spark project. Structured streaming allows us to continuously process data that we receive from a high volume data source. 
+Apache Spark, specifically spark structured streaming, is used for stream processing. Structured streaming allows us to continuously process data and make transforms to it that eventually get mapped to the input data by a spark worker. 
 
-
-
-
-
-## Connect
-## Buffer
-## Processing
-## Storage
-## Visualization
+Tensorflow is a python package that offers several implementations of machine learning models. We will use <> to make vessel trajectory path predictions. 
 
 # Pipelines
-- Explain the pipelines for processing that you are building
-- Go through your development and add your source code
 
 Appendix A shows the high-level system architecture of the real-time vessel path trajectory prediction model. The AIS data is collected from a server via a TCP socket. The AISProducer java application connects to the socket, parses the data, then publishes the data to the position_history topic on the Kafka broker. The data is then consumed by a Spark Structured Streaming connecter which performs a series of rolling window aggregate functions on the kinematic features in the data, namely speed_over_ground, course_over_ground, and rate_of_turn. The stream then outputs results to the position_history_processed Kafka topic, which in turn sends results to a spark connector for doing predictions using the MLlib package
 
-### Data Ingestion
-The AIS data was originally delivered over a TCP socket in [NMEA format](https://gpsd.gitlab.io/gpsd/AIVDM.html#_aivdmaivdo_sentence_layer) at a velocity of about 2800 messages per second. NMEA (National Marine Electronics Association) protocol 0183 (or 2000) is used to encode AIS data so it takes less bits to transmit a message from an AIS transceiver. Usually, the first step of the pipeline is to parse the NMEA-formatted AIS message. There are several open-source libraries that do this, but for this project, we will work with AIS data that has already been parsed. In order to mimic the original data-generating process, the `server.py` module opens a TCP socket on localhost and listens for incoming client connections over port 1234. The `client.py` module connects to the server socket. Once the connection is established, the server handles the connection by reading parsed AIS data from a CSV file into a `pandas.DataFrame`, converting each row into a padded json string, and finally converts the data to bytes and sending it over the socket. The client receives a fixed byte length of 900 so it receives _exactly one_ AIS message. The client then sends the message to the "position_history" topic on the kafka broker running on localhost:9092 using the `KafkaProducer` object.
-
-### Stream Processing
+### Setup
 Prior to running the `client.py` module, a kafka and zookeeper instance are created with `docker-compose.yml` by running the following:
 
 ```sh
@@ -118,12 +105,34 @@ docker-compose up -d
 ```
 If you're unfamiliar with docker (or docker compose), this command starts a container for kafka and another container for zookeeper. We pull the docker images from a popular registry on docker hub, so each of these services are mostly ready to work right out of the box. 
 
-As the client process is receiving data from the server, it is sending each AIS message to the "position_history" topic on the kafka broker running on localhost:9092. Kafka will store this data in order since there is only one topic partition. 
+
+### Data Ingestion
+The AIS data was originally delivered over a TCP socket in [NMEA format](https://gpsd.gitlab.io/gpsd/AIVDM.html#_aivdmaivdo_sentence_layer) at a velocity of about 2800 messages per second. NMEA (National Marine Electronics Association) protocol 0183 (or 2000) is used to encode AIS data so it takes less bits to transmit a message from an AIS transceiver. Usually, the first step of the pipeline is to parse the NMEA-formatted AIS message. There are several open-source libraries that do this, but for this project, we will work with AIS data that has already been parsed. In order to mimic the original data-generating process, the `server.py` module opens a TCP socket on localhost and listens for incoming client connections over port 1234. The `client.py` module connects to the server socket. Once the connection is established, the server handles the connection by reading parsed AIS data from a CSV file into a `pandas.DataFrame`, converting each row into a padded json string, and finally converts the data to bytes and sending it over the socket. The client receives a fixed byte length of 900 so it receives _exactly one_ AIS message. The client then sends the message to the "position_history" topic on the kafka broker running on localhost:9092 using the `KafkaProducer` object.
+
+### Stream Processing
 
 
+As the `position_history` topic on the kafka broker is receiving data from the python producer, we have a spark connector read the stream from the kafka topic with the following line from the `preprocess.py` module:
 
-### Storing Data Stream
-### Processing Data Stream
+```sh
+df = spark.readStream.format("kafka").option("kafka.bootstrap.servers", "127.0.0.1:9092").option("subscribe", "position_history").load()
+```
+
+The format method tells spark what the data source is and then the connection information in passed to the option methods.
+
+The rest of the module does a series of transformations (mentioned in the preprocessing section) to the input data stream. After the transformations have been applied, the spark structured streaming will do rolling window aggregations on the preprocessed data. This is done so we can smooth dynamic attributes like speed_over_ground and course_over_ground over a configured time interval. As the data is continuously passing through the transformations, the spark worker will update the values in the `df_windowavg_timewindow` object and write updates to the data sink which happens to be another kafka topic called `position_history_kinematic_aggs`:
+
+```
+send_aggregations_to_kafka = df_windowavg_timewindow \
+        .selectExpr("to_json(struct(*)) AS value") \
+        .writeStream.outputMode("complete") \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", "127.0.0.1:9092") \
+        .option("topic", "position_history_kinematic_aggs") \
+        .option("checkpointLocation", "checkpoint/send_to_kafka") \
+        .start()
+```
+
 ## Batch Processing
 ## Visualizations
 
