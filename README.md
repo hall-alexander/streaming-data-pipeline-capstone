@@ -1,15 +1,9 @@
 
 # Streaming Data Pipeline for AIS Data
-Capstone project for the Embry-Riddle Data Science graduate program.
-
-# Introduction & Goals
-- Introduce your project to the reader
-- Orient this section on the Table of contents
-- Write this like an executive summary
-  - With what data are you working
-  - What tools are you using
-  - What are you doing with these tools
-  - Once you are finished add the conclusion here as well
+Maritime vessel path trajectory prediction with AIS data has been researched for applications of collision avoidance systems; however, it remains a challenging problem since there are a lot of factors contributing to vessel path decisions. Factors such as weather, fuel consumption, and encounters with adversarial vessels (piracy) influence the vessel\'s path over the course of a voyage. Furthermore, it is difficult to apply path prediction in real-time as most existing approaches are computationally expensive and take several minutes to output predictions. This project will demonstrate real-time ingestion of AIS data from thousands of maritime vessels using:
+ - Apache Kafka for storing parsed AIS data, preprocessed features, and model predictions
+ - Apache Spark Structured Streaming for filtering the AIS data streaming, creating a feature set for the model and then feeding input data to the model
+ - Spark MLLib for modeling path trajectories
 
 # Contents
 
@@ -33,11 +27,57 @@ Capstone project for the Embry-Riddle Data Science graduate program.
 
 
 # The Data Set
-- Explain the data set
-- Why did you choose it?
-- What do you like about it?
-- What is problematic?
-- What do you want to do with it?
+
+This section describes the data used to predict vessel path trajectories.
+
+### What is AIS?
+
+One system that is often used for vessel tracking is the Automatic Identification System (AIS). The International Maritime Organization passed the Safety of Life at Sea treaty in 2002, which mandated that vessels that exceed 300 gross tonnage are required to fit a class A AIS transceiver. Since then, most commercial vessels carry an AIS transceiver on board and voluntarily broadcast their AIS signal. AIS is comparable to Automatic Dependent Surveillance-Broadcast (ADS-B) system used in the aviation industry as its intended use was for collision avoidance in traffic-heavy areas like ports or shipping lanes.
+
+### AIS Position Reports
+
+The contents of an AIS message can vary depending on the message type attribute. There are 27 message types that are commonly used, though the data in this repository has been filtered to correspond to position reports (message_type in [1, 2, 3, 18, 27]). The position report includes information relating to the ship's navigation such as the timestamp of the message, GPS coordinates, true heading, speed over ground, and course over ground. The data is transmitted in intervals of 5-30 seconds while the ship is in motion and every three minutes if the ship is anchored.
+
+### Feature Selection
+While the total dataset contains several features, we only need the features that describe the spatial orientation and motion characteristics of a vessel. After ingesting the entire position history report in the kafka topic `position history` (see Data Dictionary section), we will select the following attributes: timestamp_utc, mmsi, position, speed_over_ground, course_over_ground, true_heading, and rate_of_turn.
+
+### Preprocessing Considerations
+
+One of the major weaknesses of AIS data is the highly irregular time intervals between messages for a given MMSI, contrary to the intended transmission rate of 1 message every 3 seconds. Having irregular message intervals for data can considerably affect the accuracy of predictions made by a real-time system, since several minutes could go by before receiving another message that could have drastically different spatial/kinematic features. A dead-reckoning assumption can be used to predict a straight line path from the last transmission, though this can be error-prone if the vessel is within a port where the trajectory is more complex. [Mao et al. (2016)](https://link.springer.com/chapter/10.1007/978-3-319-57421-9_20) propose using linear interpolation as a means to fill in the missing data since ships typically have constant acceleration during a voyage. Following this approach, a new data point will be created at a 60 second offset from the last AIS message for each MMSI if a message hasn't been received within 60 seconds.
+
+Some other insight from research is that vessel paths are often region-specific (e.g. shipping lanes, chartered courses) and can be categorized into different motion patterns (e.g. straight line, sharp turn, self-crossing, reversal). Two features can be derived from the `position` attribute after it has been transformed into spatial data type: a dummy variable for the location and a numerical feature for the angle formed by a linestring connecting the current position with the previous time recorded positions (excluding points generated by linear interpolation). 
+
+Sometimes there are erroneous values in the `speed_over_ground` column. For example, a fishing vessel will be transmitting a speed in the range of 5-10 knots for the duration of a couple of hours, then the speed will suddenly jump to 110 knots. This is most likely an error with the sensor, the encoding of the value, or the parsing of the ais message. Sudden increases in speed will be replaced with the previous valid speed recording for that vessel.
+
+The `rate_of_turn` attribute is unitless as it was transformed by the AIS transceiver to a more compressed numerical representation as to use less bits when transmitting the message to the AIS ground station. The value will need to be converted back to degrees per min by the following equation:
+
+
+
+
+
+
+### Data Dictionary
+
+| column name  | data type  | description |
+| ------------ | ------------ |------------ |
+| timestamp_utc | timestamp  |The timestamp of the AIS message transmission|
+| mmsi |  string |Mobile Maritime Service Identity. <br></brUsed>Used to uniquely identify AIS data transceiver |
+| position |  string \| geospatial |Well-Known Text (WKT) representation of vessel position. Will always be a POINT geometry in WGS84|
+| navigation_status | string  |Describes current movement status of vessel|
+| speed_over_ground | float  |The current speed of the vessel (units: Knots)|
+| course_over_ground |  float |The current true heading of the vessel's path (units: Degrees)|
+| message_type |  int |The AIS message type. This dataset has been pre-filtered to position history related messages (1,2,3,18,27). See https://arundaleais.github.io/docs/ais/ais_message_types.html for more information|
+| source_identifier | string  |N/A|
+| position_verified | int  |N/A|
+| position_latency | int  |Indicator variable where 0 is if the reported position took less than 5 seconds to receive and is 1 if the reported position took more than 5 second to receive. Only used in message type 27 for long-range detection of AIS messages|
+| raim_flag |int|Receiver autonomous integrity monitoring. Boolean indicator used to identify if RAIM process is available. See https://www.navcen.uscg.gov/?pageName=AISMessagesA#RAIM|
+| vessel_name |string|Name of the vessel|
+| vessel_type |string|Vessel type classification by AIS standards. See https://api.vesselfinder.com/docs/ref-aistypes.html|
+| timestamp_offset_seconds |int|UTC second from timestamp_utc field (units: seconds)|
+| true_heading |float|The current magnetic heading of the vessel’s bow (units: degrees)|
+| rate_of_turn |float|Rate of turn value stored in AIS message; **NOT in deg/min**. Have to divide by 4.733 then square the value in order to convert to degrees/min. See https://faq.spire.com/how-to-convert-the-decoded-rate-of-turn-rot-value-into-degrees-per-minute|
+| repeat_indicator |int|Directive to an AIS transceiver that this message should be rebroadcast because of nearby obstructions that can block the message transmission to the ground station.|
+
 
 # Used Tools
 - Explain which tools do you use and why
@@ -45,19 +85,54 @@ Capstone project for the Embry-Riddle Data Science graduate program.
 - Why did you choose them
 - How did you set them up
 
-## Connect
-## Buffer
-## Processing
-## Storage
-## Visualization
+This project uses Apache Kafka for data ingestion and data buffering. Apache Kafka is a distributed, event-streaming platform designed for real-time analytical workflows. It is a fusion of two types of queue systems: the shared message queue and the publish-subscribe model. Kafka functions like a shared message queue when there is only one consumer group for a particular topic; however, when an additional consumer group is added then Kafka functions like a pub-sub system where messages can be sent to all subscribers. This project is only using one topic, one partition, and one consumer group - so why use a tool as complex as Kafka? One of the major advantages of Kafka for this project is the integration with Spark Structured Streaming. Kafka can be used as both source and sink for the stream, which makes it very simple to move data. Another reason is that this project eventually needs to scale for commercial application at [Space-Eyes](https://space-eyes.com/). Kafka can easily scale by adding more brokers to the cluster to handle more messages.
+
+The kafka cluster was originally configured on my Windows 10 desktop, though the configuration was eventually encoded in the `docker-compose.yml` file. The docker compose file will also start a zookeeper instance, which is used for administration tasks for the kafka cluster e.g. controller election in node failure scenario, tracking cluster topology, topic configuration settings. 
+
+Apache Spark, specifically spark structured streaming, is used for stream processing. Structured streaming allows us to continuously process data and make transforms to it that eventually get mapped to the input data by a spark worker. 
+
+Tensorflow is a python package that offers several implementations of machine learning models. We will use <> to make vessel trajectory path predictions. 
 
 # Pipelines
-- Explain the pipelines for processing that you are building
-- Go through your development and add your source code
 
-## Stream Processing
-### Storing Data Stream
-### Processing Data Stream
+Appendix A shows the high-level system architecture of the real-time vessel path trajectory prediction model. The AIS data is collected from a server via a TCP socket. The AISProducer java application connects to the socket, parses the data, then publishes the data to the position_history topic on the Kafka broker. The data is then consumed by a Spark Structured Streaming connecter which performs a series of rolling window aggregate functions on the kinematic features in the data, namely speed_over_ground, course_over_ground, and rate_of_turn. The stream then outputs results to the position_history_processed Kafka topic, which in turn sends results to a spark connector for doing predictions using the MLlib package
+
+### Setup
+Prior to running the `client.py` module, a kafka and zookeeper instance are created with `docker-compose.yml` by running the following:
+
+```sh
+docker-compose up -d
+```
+If you're unfamiliar with docker (or docker compose), this command starts a container for kafka and another container for zookeeper. We pull the docker images from a popular registry on docker hub, so each of these services are mostly ready to work right out of the box. 
+
+
+### Data Ingestion
+The AIS data was originally delivered over a TCP socket in [NMEA format](https://gpsd.gitlab.io/gpsd/AIVDM.html#_aivdmaivdo_sentence_layer) at a velocity of about 2800 messages per second. NMEA (National Marine Electronics Association) protocol 0183 (or 2000) is used to encode AIS data so it takes less bits to transmit a message from an AIS transceiver. Usually, the first step of the pipeline is to parse the NMEA-formatted AIS message. There are several open-source libraries that do this, but for this project, we will work with AIS data that has already been parsed. In order to mimic the original data-generating process, the `server.py` module opens a TCP socket on localhost and listens for incoming client connections over port 1234. The `client.py` module connects to the server socket. Once the connection is established, the server handles the connection by reading parsed AIS data from a CSV file into a `pandas.DataFrame`, converting each row into a padded json string, and finally converts the data to bytes and sending it over the socket. The client receives a fixed byte length of 900 so it receives _exactly one_ AIS message. The client then sends the message to the "position_history" topic on the kafka broker running on localhost:9092 using the `KafkaProducer` object.
+
+### Stream Processing
+
+
+As the `position_history` topic on the kafka broker is receiving data from the python producer, we have a spark connector read the stream from the kafka topic with the following line from the `preprocess.py` module:
+
+```sh
+df = spark.readStream.format("kafka").option("kafka.bootstrap.servers", "127.0.0.1:9092").option("subscribe", "position_history").load()
+```
+
+The format method tells spark what the data source is and then the connection information in passed to the option methods.
+
+The rest of the module does a series of transformations (mentioned in the preprocessing section) to the input data stream. After the transformations have been applied, the spark structured streaming will do rolling window aggregations on the preprocessed data. This is done so we can smooth dynamic attributes like speed_over_ground and course_over_ground over a configured time interval. As the data is continuously passing through the transformations, the spark worker will update the values in the `df_windowavg_timewindow` object and write updates to the data sink which happens to be another kafka topic called `position_history_kinematic_aggs`:
+
+```
+send_aggregations_to_kafka = df_windowavg_timewindow \
+        .selectExpr("to_json(struct(*)) AS value") \
+        .writeStream.outputMode("complete") \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", "127.0.0.1:9092") \
+        .option("topic", "position_history_kinematic_aggs") \
+        .option("checkpointLocation", "checkpoint/send_to_kafka") \
+        .start()
+```
+
 ## Batch Processing
 ## Visualizations
 
@@ -72,7 +147,7 @@ Write a comprehensive conclusion.
 - What were the biggest challenges
 
 # Follow Me On
-Add the link to your LinkedIn Profile
+[LinkedIn](https://www.linkedin.com/in/alex-hall-73534515a/ "LinkedIn | Alex Hall")
 
 # Appendix
 
