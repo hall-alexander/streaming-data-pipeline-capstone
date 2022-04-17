@@ -42,7 +42,7 @@ features = df \
 
 columns = ["mmsi", "timestamp_utc", "speed_over_ground", "course_over_ground", "rate_of_turn",
     "longitude", "latitude", "cartesian_x", "cartesian_y"]
-df_pandas = pd.DataFrame(data=[[-1, "2021-04-05 00:00:00", 5.6, 2.5, 2.5, 101.2, 45.3, 12485.0, 23958352.0, 1]], columns=columns)
+df_pandas = pd.DataFrame(data=[[-1, "2021-04-05 00:00:00", 5.6, 2.5, 2.5, 101.2, 45.3, 12485.0, 23958352.0]], columns=columns)
 global vessel_positions
 vessel_positions = spark.createDataFrame(df_pandas)
 
