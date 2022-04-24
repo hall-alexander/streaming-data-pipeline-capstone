@@ -52,10 +52,6 @@ vessel_positions = spark.createDataFrame(df_pandas)
 vessel_positions = vessel_positions.withColumn("timestamp_utc", to_timestamp(vessel_positions.timestamp_utc, "yyyy-MM-dd HH:mm:ss"))
 vessel_positions.createGlobalTempView("vessel_positions")
 
-#features = features.withColumn("timestamp_utc", to_timestamp(features.timestamp_utc, "yyyy-MM-dd HH:mm:ss'Z'"))
-#features = features.withColumn("timestamp_utc", to_timestamp(features.timestamp_utc, "yyyy-MM-dd HH:mm:ss"))
-
-
 def select_current_vessels(df, epoch_id):
     df.persist()
     print(df.show())
@@ -90,79 +86,10 @@ def select_current_vessels(df, epoch_id):
 #         from temp where row_number in (1,2,3)""".strip())
 #     vessel_positions = df2
 
-features.writeStream.outputMode("append").foreachBatch(select_current_vessels).start().awaitTermination()
 
-features.writeStream.foreachBatch(foreach_batch_function).format("csv").option("path", OUTPUT_DIR).option("checkpointLocation", CHECKPOINT_DIR).trigger(processingTime="30 seconds").start()
+# FIXME There seems to be some intricate dependency conflicts happening between java, spark, and the pyspark modules that reference the py4j package to establish a connection to the JVM on the spark cluster
+# Can get this to run on laptop but not on desktop. Have to check version numbers later and probably write a dockerfile with a specified java and spark version
+# features.writeStream.outputMode("append").foreachBatch(select_current_vessels).start().awaitTermination()
 
-query = features.writeStream.foreachBatch(foreach_batch_function).option("checkpointLocation", CHECKPOINT_DIR).trigger(processingTime="30 seconds").start()  
-
-query = features.writeStream.foreachBatch(foreach_batch_function).option("checkpointLocation", CHECKPOINT_DIR).start()  
-query = features.writeStream.foreachBatch(foreach_batch_function).option("checkpointLocation", CHECKPOINT_DIR).trigger(processingTime="30 seconds").start()  
-
-
-spark.awaitTerminationOrTimeout(10)
-#   
-
-#.option("checkpointLocation", CHECKPOINT_DIR)
-
-features_out = features.writeStream.outputMode("append") \
-    .format("csv") \
-    .option("path", r"C:\Users\AlexHall97\Documents\output") \
-    .option("checkpointLocation", r"C:\Users\AlexHall97\Documents\kafka_checkpoints\csv") \
-    .trigger(processingTime="30 seconds") \
-    .start()
-
-
-
-
-def foreach_batch_function(df, epoch_id):
-    # Transform and write batchDF
-    df.createOrReplaceTempView("batch")
-    current = spark.sql("select * from batch")
-    df_3 = spark.sql("""with temp as (select *, row_number() over (partition by mmsi order by timestamp_utc desc) as row_number from query q) 
-                    select * from temp where row_number in (1,2)""".strip())
-    vessel_positions = vessel_positions.alias('vp').join(
-        current.alias('c'), 
-        ['mmsi'], 
-        how='outer'
-    ).select("mmsi", "timestamp_utc", "speed_over_ground", "course_over_ground", "rate_of_turn",
-    "longitude", "latitude", "cartesian_x", "cartesian_y")
-    vessel_positions.createOrReplaceTempView("vessel_positions")
-    vessel_positions = spark.sql("""with temp as (select *, row_number() over (partition by mmsi order by timestamp_utc desc) as row_number from vessel_positions vp) 
-                    select * from temp where row_number in (1,2,3)""".strip())
-    vessel_positions.show()
-
-def foreach_function(row):
-    print(row)
-
-features.writeStream.foreach(foreach_function).option("checkpointLocation", CHECKPOINT_DIR).start()  
-
-
-# features = features.withColumn("window_start_timestamp", to_timestamp(features.window_start, "yyyy-MM-dd'T'HH:mm:ss'Z'"))
-# features = features.withColumn("window_end_timestamp", to_timestamp(features.window_end, "yyyy-MM-dd'T'HH:mm:ss'Z'"))
-
-# test = df.writeStream \
-#     .option("checkpointLocation", r"C:\Users\LethalCaffeine\Documents\kafka_checkpoints\features") \
-#     .toTable("features")
-
-# spark.read.table("features").show()
-
-# test.createOrReplaceTempView("updates")
-
-features.withColumn("")
-
-windowPartition = Window.partitionBy("mmsi").orderBy("window_start")
-
-# spark.sql("select mmsi, window_start, window_end, moving_avg_sog, moving_avg_cog, moving_avg_rot, longitude, latitude, cartesian_x, cartesian_y,  from updates")
-
-features_out = features.writeStream.outputMode("append") \
-    .format("csv") \
-    .option("path", r"C:\Users\LethalCaffeine\Documents\output") \
-    .option("checkpointLocation", r"C:\Users\LethalCaffeine\Documents\output\checkpoint") \
-    .trigger(processingTime="30 seconds") \
-    .start()
-
-
-
-
-features_out.awaitTermination()
+# it appears that whatever sink is specified last in the method chain will be the sink used by the stream
+features.writeStream.foreachBatch(select_current_vessels).format("csv").option("path", OUTPUT_DIR).option("checkpointLocation", CHECKPOINT_DIR).trigger(processingTime="30 seconds").start().awaitTerminationOrTimeout(300)
